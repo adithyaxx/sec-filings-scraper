@@ -1,7 +1,10 @@
+import lxml
 from urllib.request import urlopen
 import os
 import csv
-from bs4 import BeautifulSoup, NavigableString
+
+import requests
+from bs4 import BeautifulSoup, NavigableString, Comment
 import re
 
 # Parameters
@@ -29,10 +32,73 @@ def writecsv(row):
 
 
 def strip_html(src):
-    p = BeautifulSoup(src)
+    p = BeautifulSoup(src, features="lxml")
     text = p.findAll(text=lambda text: isinstance(text, NavigableString))
 
     return u" ".join(text)
+
+
+def is_line_break(e):
+    """Is e likely to function as a line break when document is rendered?
+    we are including 'HTML block-level elements' here. Note <p> ('paragraph')
+    and other tags may not necessarily force the appearance of a 'line break',
+    on the page if they are enclosed inside other elements, notably a
+    table cell
+    """
+
+    is_block_tag = e.name != None and e.name in ['p', 'div', 'br', 'hr', 'tr',
+                                                 'table', 'form', 'h1', 'h2',
+                                                 'h3', 'h4', 'h5', 'h6']
+    # handle block tags inside tables: if the apparent block formatting is
+    # enclosed in a table cell <td> tags, and if there are no other block
+    # elements within the <td> cell (it's a singleton, then it will not
+    # necessarily appear on a new line so we don't treat it as a line break
+    if is_block_tag and e.parent.name == 'td':
+        if len(e.parent.findChildren(name=e.name)) == 1:
+            is_block_tag = False
+    # inspect the style attribute of element e (if any) to see if it has
+    # block style, which will appear as a line break in the document
+    if hasattr(e, 'attrs') and 'style' in e.attrs:
+        is_block_style = re.search('margin-(top|bottom)', e['style'])
+    else:
+        is_block_style = False
+    return is_block_tag or is_block_style
+
+
+def get_text(soup):
+    paragraph_string = ''
+    document_string = ''
+    all_paras = []
+    ec = soup.find()
+    is_in_a_paragraph = True
+    while not (ec is None):
+        if is_line_break(ec) or ec.next_element is None:
+            # end of paragraph tag (does not itself contain
+            # Navigable String): insert double line-break for readability
+            if is_in_a_paragraph:
+                is_in_a_paragraph = False
+                all_paras.append(paragraph_string)
+                document_string = document_string + '\n\n' + paragraph_string
+        else:
+            # continuation of the current paragraph
+            if isinstance(ec, NavigableString) and not \
+                    isinstance(ec, Comment):
+                # # remove redundant line breaks and other whitespace at the
+                # # ends, and in the middle, of the string
+                # ecs = re.sub(r'\s+', ' ', ec.string.strip())
+                ecs = re.sub(r'\s+', ' ', ec.string)
+                if len(ecs) > 0:
+                    if not (is_in_a_paragraph):
+                        # set up for the start of a new paragraph
+                        is_in_a_paragraph = True
+                        paragraph_string = ''
+                    # paragraph_string = paragraph_string + ' ' + ecs
+                    paragraph_string = paragraph_string + ecs
+        ec = ec.next_element
+    # clean up multiple line-breaks
+    document_string = re.sub('\n\s+\n', '\n\n', document_string)
+    document_string = re.sub('\n{3,}', '\n\n', document_string)
+    return document_string
 
 
 # Get the Master Index File for the every year in range
@@ -52,9 +118,7 @@ for year in range(MINYEAR, MAXYEAR):
         # Go through each line of the master index file, find 10K/10Q filings extract the text file path
         for line in response:
             if string_match1 in line.decode():
-                print(line)
                 element2 = line.decode().split('|')
-                print(element2)
                 if FILE_10Q in element2[2] or FILE_10K in element2[2]:
                     cik = element2[0]
                     company_name = element2[1]
@@ -64,25 +128,66 @@ for year in range(MINYEAR, MAXYEAR):
                     # The path of the 10-K/10-Q filing
                     url3 = 'https://www.sec.gov/Archives/' + element4
                     print("Processing %s of %s from %s" % (form, cik, url3))
-                    response3 = urlopen(url3)
-                    #response3 = strip_html(response3)
-                    soup = BeautifulSoup(response3)
-                    text = soup.get_text()
-                    words = ['% of our', 'ITEM 7A', 'hedg', '% of projected', 'employee']
+                    response3 = requests.get(url3)
+                    soup = BeautifulSoup(response3.text, 'html.parser')
+                    text = get_text(soup)
+                    words = ['% of our', 'ITEM 7A', 'hedg', '% of projected', 'full-time employee']
 
                     rows_to_write = []
-                    lines = re.split(r'([.\n])', text)
-                    for line2 in lines:
-                        line2 = strip_html(line2)
+                    lines = re.split("\n", text)
+                    lines = list(filter(None, lines))
+
+                    for i in range(0, len(lines)):
+                        line2 = strip_html(lines[i]).lower()
+                        next_line = ""
+                        prev_line = ""
+
+                        '''
+                        if i > 0:
+                            new_line = strip_html(lines[i - 1]).lower()
+                            if new_line != "" and new_line != " " and new_line != "  " and new_line != "   ":
+                                prev_line = new_line + ". "
+                        if i < len(lines) - 1:
+                            next_line = ". " + strip_html(lines[i + 1]).lower()
+                        '''
+                        
                         row_to_write = [cik, company_name, form, filing_date, year, qtr]
                         keywords = []
-                        for word in words:
-                            if word in line2:
-                                keywords.extend([word])
-                                keywords.extend([line2])
-                            else:
-                                keywords.extend([''])
-                                keywords.extend([''])
+
+                        if '% of our' in line2:
+                            keywords.extend(['% of our'])
+                            keywords.extend([prev_line + line2 + next_line])
+                        else:
+                            keywords.extend([''])
+                            keywords.extend([''])
+
+                        if 'item 7a' in line2:
+                            keywords.extend(['item 7a'])
+                            keywords.extend([prev_line + line2 + next_line])
+                        else:
+                            keywords.extend([''])
+                            keywords.extend([''])
+
+                        if 'hedg' in line2:
+                            keywords.extend(['hedg'])
+                            keywords.extend([prev_line + line2 + next_line])
+                        else:
+                            keywords.extend([''])
+                            keywords.extend([''])
+
+                        if '% of projected' in line2:
+                            keywords.extend(['% of projected'])
+                            keywords.extend([prev_line + line2 + next_line])
+                        else:
+                            keywords.extend([''])
+                            keywords.extend([''])
+
+                        if 'full-time employee' in line2 or 'full time employee' in line2:
+                            keywords.extend(['full-time employee'])
+                            keywords.extend([prev_line + line2 + next_line])
+                        else:
+                            keywords.extend([''])
+                            keywords.extend([''])
 
                         if keywords.count('') < 9:
                             row_to_write.extend(keywords)
