@@ -2,10 +2,11 @@ import lxml
 from urllib.request import urlopen
 import os
 import csv
-
 import requests
 from bs4 import BeautifulSoup, NavigableString, Comment
 import re
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module='bs4')
 
 # Parameters
 MINYEAR = 2014
@@ -88,7 +89,7 @@ def get_text(soup):
                 # ecs = re.sub(r'\s+', ' ', ec.string.strip())
                 ecs = re.sub(r'\s+', ' ', ec.string)
                 if len(ecs) > 0:
-                    if not (is_in_a_paragraph):
+                    if not is_in_a_paragraph:
                         # set up for the start of a new paragraph
                         is_in_a_paragraph = True
                         paragraph_string = ''
@@ -96,8 +97,8 @@ def get_text(soup):
                     paragraph_string = paragraph_string + ecs
         ec = ec.next_element
     # clean up multiple line-breaks
-    document_string = re.sub('\n\s+\n', '\n\n', document_string)
-    document_string = re.sub('\n{3,}', '\n\n', document_string)
+    # document_string = re.sub('\n\s+\n', '\n\n', document_string)
+    # document_string = re.sub('\n{3,}', '\n\n', document_string)
     return document_string
 
 
@@ -116,9 +117,9 @@ for year in range(MINYEAR, MAXYEAR):
         company_name = ""
 
         # Go through each line of the master index file, find 10K/10Q filings extract the text file path
-        for line in response:
-            if string_match1 in line.decode():
-                element2 = line.decode().split('|')
+        for res in response:
+            if string_match1 in res.decode():
+                element2 = res.decode().split('|')
                 if FILE_10Q in element2[2] or FILE_10K in element2[2]:
                     cik = element2[0]
                     company_name = element2[1]
@@ -130,60 +131,96 @@ for year in range(MINYEAR, MAXYEAR):
                     print("Processing %s of %s from %s" % (form, cik, url3))
                     response3 = requests.get(url3)
                     soup = BeautifulSoup(response3.text, 'html.parser')
-                    text = get_text(soup)
-                    words = ['% of our', 'ITEM 7A', 'hedg', '% of projected', 'full-time employee']
+                    for table in soup.find_all("table"):
+                        table.decompose()
+                    for headers in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'a', 'U', 'A']):
+                        headers.decompose()
+                    # text = get_text(soup)
+                    text = strip_html(soup.getText())
+                    words = ['% of our', 'item 7a', 'hedg', '% of projected', 'full-time employee']
 
                     rows_to_write = []
-                    lines = re.split("\n", text)
-                    lines = list(filter(None, lines))
+                    lines = re.split("\\. |\n", text)
+                    newlines = []
 
-                    for i in range(0, len(lines)):
-                        line2 = strip_html(lines[i]).lower()
+                    for line in lines:
+                        line = re.sub("\s+", ' ', line.strip())
+                        if 50 <= len(line) <= 400:
+                            line += "."
+                            newlines.append(line)
+
+                    '''
+                    text_file = open("out.txt", "w")
+
+                    for tmpln in newlines:
+                        tmpln = re.sub("\s+", ' ', tmpln.strip())
+
+                        if (tmpln != ' ') and (tmpln != '') and ('us-gaap' not in tmpln) and (not tmpln.isupper()):
+                            text_file.write(tmpln + "\n")
+
+                    text_file.close()
+                    '''
+
+                    for i in range(0, len(newlines)):
+                        # line2 = strip_html(newlines[i]).lower()
+                        # line2 = re.sub('\s+', ' ', line2.strip())
+                        line2 = strip_html(newlines[i])
                         next_line = ""
                         prev_line = ""
 
-                        '''
                         if i > 0:
-                            new_line = strip_html(lines[i - 1]).lower()
+                            new_line = strip_html(newlines[i - 1]).lower()
                             if new_line != "" and new_line != " " and new_line != "  " and new_line != "   ":
-                                prev_line = new_line + ". "
-                        if i < len(lines) - 1:
-                            next_line = ". " + strip_html(lines[i + 1]).lower()
-                        '''
-                        
+                                new_line = re.sub('\s+', ' ', new_line.strip())
+                                prev_line = new_line
+                        if i < len(newlines) - 1:
+                            new_line = strip_html(newlines[i + 1]).lower()
+                            new_line = re.sub('\s+', ' ', new_line.strip())
+                            next_line = new_line
+
                         row_to_write = [cik, company_name, form, filing_date, year, qtr]
                         keywords = []
 
-                        if '% of our' in line2:
-                            keywords.extend(['% of our'])
+                        if words[0] in line2:
+                            num = [re.findall(r"(\d+)" + words[0], line2)]
+
+                            if num is None:
+                                num = [re.findall(r"(\d+)" + ' ' + words[0], line2)]
+
+                            keywords.extend(num)
                             keywords.extend([prev_line + line2 + next_line])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
-                        if 'item 7a' in line2:
-                            keywords.extend(['item 7a'])
+                        if words[1] in line2:
+                            keywords.extend([line2.count(words[1])])
                             keywords.extend([prev_line + line2 + next_line])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
-                        if 'hedg' in line2:
-                            keywords.extend(['hedg'])
+                        if words[2] in line2:
+                            keywords.extend([line2.count(words[2])])
                             keywords.extend([prev_line + line2 + next_line])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
-                        if '% of projected' in line2:
-                            keywords.extend(['% of projected'])
+                        if words[3] in line2:
+                            num = [re.findall(r"(\d+)" + words[3], line2)]
+
+                            if num is None:
+                                num = [re.findall(r"(\d+)" + ' ' + words[3], line2)]
+
+                            keywords.extend(num)
                             keywords.extend([prev_line + line2 + next_line])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
                         if 'full-time employee' in line2 or 'full time employee' in line2:
-                            keywords.extend(['full-time employee'])
+                            keywords.extend([re.findall(r"(\d+)" + "full", line2)])
                             keywords.extend([prev_line + line2 + next_line])
                         else:
                             keywords.extend([''])
