@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup, NavigableString, Comment
 import re
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module='bs4')
 
 # Parameters
@@ -14,8 +15,8 @@ MAXYEAR = 2015
 FILE_10K = '10-K'
 FILE_10Q = '10-Q'
 CSV_FILE = 'out.csv'
-HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter', '% of our', 'P1',
-           'ITEM 7A', 'P2', 'Hedg', 'P3', '% of projected', 'P4', 'Employee', 'P5', 'URL']
+HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter',
+           'ITEM 7A', 'P1', 'hedg', 'P2', 'exposure to', 'Employee', 'P4', 'URL']
 
 
 def writecsv(row):
@@ -131,22 +132,33 @@ for year in range(MINYEAR, MAXYEAR):
                     print("Processing %s of %s from %s" % (form, cik, url3))
                     response3 = requests.get(url3)
                     soup = BeautifulSoup(response3.text, 'html.parser')
+
+                    '''
                     for table in soup.find_all("table"):
                         table.decompose()
                     for headers in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'a', 'U', 'A']):
                         headers.decompose()
                     # text = get_text(soup)
                     text = strip_html(soup.getText())
-                    words = ['% of our', 'item 7a', 'hedg', '% of projected', 'full-time employee']
+                    # words = ['% of our', 'item 7a', 'hedg', '% of projected', 'full-time employee']
+                    '''
 
-                    rows_to_write = []
-                    lines = re.split("\\. |\n", text)
+                    words = ['item 7a', '% of our', '% of projected', 'exposure to', 'full-time employee']
+
+                    lines = []
                     newlines = []
+                    rows_to_write = []
+
+                    for paragraph in soup.find_all("p"):
+                        split_paragraphs = re.split("\n", paragraph.text)
+                        lines += split_paragraphs
+
+                    # lines = re.split("\\. ", text)
 
                     for line in lines:
                         line = re.sub("\s+", ' ', line.strip())
                         if 50 <= len(line) <= 400:
-                            line += "."
+                            # line += "."
                             newlines.append(line)
 
                     '''
@@ -161,9 +173,10 @@ for year in range(MINYEAR, MAXYEAR):
                     text_file.close()
                     '''
 
-                    for i in range(0, len(newlines)):
+                    for i in range(0, len(newlines), 5):
                         # line2 = strip_html(newlines[i]).lower()
                         # line2 = re.sub('\s+', ' ', line2.strip())
+                        '''
                         line2 = strip_html(newlines[i])
                         next_line = ""
                         prev_line = ""
@@ -180,53 +193,65 @@ for year in range(MINYEAR, MAXYEAR):
 
                         row_to_write = [cik, company_name, form, filing_date, year, qtr]
                         keywords = []
+                        line2 = prev_line + line2 + next_line
+                        # print(line2)
+                        '''
+                        row_to_write = [cik, company_name, form, filing_date, year, qtr]
+                        keywords = []
+                        line2 = newlines[i]
+
+                        if i+1 < len(newlines):
+                            line2 += ' ' + newlines[i+1]
+
+                        if i+2 < len(newlines):
+                            line2 += ' ' + newlines[i+2]
+
+                        if i+3 < len(newlines):
+                            line2 += ' ' + newlines[i+3]
+
+                        if i+4 < len(newlines):
+                            line2 += ' ' + newlines[i+4]
 
                         if words[0] in line2:
-                            num = [re.findall(r"(\d+)" + words[0], line2)]
-
-                            if num is None:
-                                num = [re.findall(r"(\d+)" + ' ' + words[0], line2)]
-
-                            keywords.extend(num)
-                            keywords.extend([prev_line + line2 + next_line])
+                            keywords.extend([line2.count(words[0])])
+                            keywords.extend([line2])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
-                        if words[1] in line2:
-                            keywords.extend([line2.count(words[1])])
-                            keywords.extend([prev_line + line2 + next_line])
-                        else:
-                            keywords.extend([''])
-                            keywords.extend([''])
+                        if 'hedg' in line2:
+                            if words[1] in line2 or words[2] in line2:
+                                num1 = [re.findall(r"(\d+)" + words[1], line2)]
+                                num2 = [re.findall(r"(\d+)" + words[2], line2)]
 
-                        if words[2] in line2:
-                            keywords.extend([line2.count(words[2])])
-                            keywords.extend([prev_line + line2 + next_line])
+                                if num1 is None:
+                                    num1 = [re.findall(r"(\d+)" + ' ' + words[1], line2)]
+
+                                if num2 is None:
+                                    num2 = [re.findall(r"(\d+)" + ' ' + words[2], line2)]
+
+                                keywords.extend(num1 + num2)
+                                keywords.extend([line2])
+                            else:
+                                keywords.extend(['NA'])
+                                keywords.extend([line2])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
                         if words[3] in line2:
-                            num = [re.findall(r"(\d+)" + words[3], line2)]
-
-                            if num is None:
-                                num = [re.findall(r"(\d+)" + ' ' + words[3], line2)]
-
-                            keywords.extend(num)
-                            keywords.extend([prev_line + line2 + next_line])
+                            keywords.extend([line2])
                         else:
-                            keywords.extend([''])
                             keywords.extend([''])
 
                         if 'full-time employee' in line2 or 'full time employee' in line2:
-                            keywords.extend([re.findall(r"(\d+)" + "full", line2)])
-                            keywords.extend([prev_line + line2 + next_line])
+                            keywords.extend([re.findall(r"(\d+)" + " full", line2)])
+                            keywords.extend([line2])
                         else:
                             keywords.extend([''])
                             keywords.extend([''])
 
-                        if keywords.count('') < 9:
+                        if keywords.count('') < 6:
                             row_to_write.extend(keywords)
                             row_to_write.extend([url3])
                             rows_to_write.append(row_to_write)
