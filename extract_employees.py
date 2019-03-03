@@ -3,19 +3,26 @@ from urllib.request import urlopen
 import sys
 import os
 import csv
-import requests
+
+import nltk
 from bs4 import BeautifulSoup, NavigableString, Comment
 import re
 import warnings
 import urllib.error
 import socket
+from nltk import tokenize
+nltk.download('punkt')
+import requests
+import html
 import pandas as pd
 from pathlib import Path
+
+from pandas.compat import reduce
 
 warnings.filterwarnings("ignore", category=UserWarning, module='bs4')
 
 # Parameters
-MINYEAR = 2013
+MINYEAR = 2014
 MAXYEAR = 2017
 FILE_10K = '10-K'
 FILE_10Q = '10-Q'
@@ -52,10 +59,18 @@ def writecsv(row):
 
 
 def strip_html(src):
-    p = BeautifulSoup(src, features="lxml")
+    p = BeautifulSoup(src, features="html.parser")
     text = p.findAll(text=lambda text: isinstance(text, NavigableString))
 
     return u" ".join(text)
+
+
+def remove_duplicates(duplicate):
+    final_list = []
+    for num in duplicate:
+        if num not in final_list:
+            final_list.append(num)
+    return final_list
 
 
 # Get the Master Index File for the every year in range
@@ -80,9 +95,9 @@ for year in range(MINYEAR, MAXYEAR):
         company_name = ""
 
         # Go through each line of the master index file, find 10K/10Q filings extract the text file path
-        for res in response:
-            if string_match1 in res:
-                element2 = res.split('|')
+        for i in range(0, len(response)):
+            if string_match1 in response[i]:
+                element2 = response[i].split('|')
                 if FILE_10Q in element2[2] or FILE_10K in element2[2]:
                     cik = element2[0]
                     company_name = element2[1]
@@ -90,50 +105,57 @@ for year in range(MINYEAR, MAXYEAR):
                     filing_date = element2[3]
                     element4 = element2[4]
 
+                    # The path of the 10-K/10-Q filing
+                    url3 = 'https://www.sec.gov/Archives/' + element4
+
                     try:
-                        # The path of the 10-K/10-Q filing
-                        url3 = 'https://www.sec.gov/Archives/' + element4
-                        response3 = requests.get(url3)
+                        response3 = urlopen(url3, timeout=1000).read()
 
                         # Parse and find keywords
-                        soup = BeautifulSoup(response3.text, 'html.parser')
+                        soup = BeautifulSoup(response3.decode('utf-8'), 'html.parser')
 
-                        print("Processing %s of %s from %s" % (form, cik, url3))
+                        percentage = i / len(response) * 100
+
+                        print("[%.2f%%] [%s] Processing %s of %s from %s" % (percentage, year, form, cik, url3))
 
                         lines = []
-                        newlines = []
+                        formatted_sentences = []
                         rows_to_write = []
 
+                        for remove in soup.find_all(["table", "tr", "td"]):
+                            remove.decompose()
+
                         for paragraph in soup.find_all("p"):
-                            split_paragraphs = re.split("\n", paragraph.text)
-                            lines += split_paragraphs
+                            if len(list(paragraph.children)) <= 1:
+                                formatted_paragraph = paragraph.text.replace('\n', ' ')
+                                formatted_paragraph = re.sub('\s+', " ", formatted_paragraph)
+                                formatted_paragraph = formatted_paragraph.strip()
+                                split_sentences = tokenize.sent_tokenize(formatted_paragraph)
 
-                        for line in lines:
-                            line = re.sub("\s+", ' ', line.strip())
-                            if 50 <= len(line) <= 400:
-                                # line += "."
-                                newlines.append(line)
+                                for sen in split_sentences:
+                                    if sen not in formatted_sentences and len(sen) > 50:
+                                        formatted_sentences.append(sen)
 
-                        for i in range(0, len(newlines), 5):
+                        for index in range(0, len(formatted_sentences), 5):
                             row_to_write = [cik, company_name, form, filing_date, year, qtr]
                             keywords = []
-                            line2 = newlines[i]
+                            line2 = formatted_sentences[index]
 
-                            if i + 1 < len(newlines):
-                                line2 += ' ' + newlines[i + 1]
+                            if index + 1 < len(formatted_sentences):
+                                line2 += ' ' + formatted_sentences[index + 1]
 
-                            if i + 2 < len(newlines):
-                                line2 += ' ' + newlines[i + 2]
+                            if index + 2 < len(formatted_sentences):
+                                line2 += ' ' + formatted_sentences[index + 2]
 
-                            if i + 3 < len(newlines):
-                                line2 += ' ' + newlines[i + 3]
+                            if index + 3 < len(formatted_sentences):
+                                line2 += ' ' + formatted_sentences[index + 3]
 
-                            if i + 4 < len(newlines):
-                                line2 += ' ' + newlines[i + 4]
+                            if index + 4 < len(formatted_sentences):
+                                line2 += ' ' + formatted_sentences[index + 4]
 
                             # Extract numbers near full time employee
                             if 'full-time employee' in line2.lower() or 'full time employee' in line2.lower():
-                                keywords.extend([re.findall(r"(\d+)" + " full", line2.lower())])
+                                keywords.extend([re.findall(r"(\d+)" + " full", re.sub(r',', '', line2.lower()))])
                                 keywords.extend([line2])
                             else:
                                 keywords.extend([''])
