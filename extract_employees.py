@@ -31,8 +31,8 @@ FILE_10Q = '10-Q'
 CSV_FILE = 'employees.csv'
 IN_FILE = 'babylist.txt'
 
-HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter', 'full time employees', 'extract',
-           'URL']
+HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter', 'Conformed Period',
+           'Standard Industrial Classification', 'State of Incorporation', 'City', 'State', 'full time employees', 'extract', 'URL']
 
 
 def readfromweb(year, quarter):
@@ -103,6 +103,11 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
             filing_date = ""
             cik = ""
             company_name = ""
+            conformed_period = ""
+            standard_industrial = ""
+            state_of_incorporation = ""
+            city = ""
+            state = ""
 
             # Go through each line of the master index file, find 10K/10Q filings extract the text file path
             for i in range(0, len(response)):
@@ -134,6 +139,32 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
                                 formatted_sentences = []
                                 rows_to_write = []
 
+                                sptext = str(soup.get_text)
+                                for paragraph in sptext.split("\n"):
+                                    paragraph = re.sub('\s+', ' ', paragraph)
+
+                                    if 'CONFORMED PERIOD OF REPORT:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        fetched_date = split_by_colon[1].strip()
+                                        conformed_period = '%s-%s-%s' % (
+                                        fetched_date[0:4], fetched_date[4:6], fetched_date[6:])
+
+                                    if "STANDARD INDUSTRIAL CLASSIFICATION:" in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        standard_industrial = split_by_colon[1].strip()
+
+                                    if 'STATE OF INCORPORATION:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        state_of_incorporation = split_by_colon[1].strip()
+
+                                    if "CITY:" in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        city = split_by_colon[1].strip()
+
+                                    if 'STATE:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        state = split_by_colon[1].strip()
+
                                 for remove in soup.find_all(["table", "tr", "td"]):
                                     remove.decompose()
 
@@ -149,7 +180,8 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
                                                 formatted_sentences.append(sen)
 
                                 for index in range(0, len(formatted_sentences), 5):
-                                    row_to_write = [cik, company_name, form, filing_date, year, qtr]
+                                    row_to_write = [cik, company_name, form, filing_date, year, qtr, conformed_period,
+                                                    standard_industrial, state_of_incorporation, city, state]
                                     keywords = []
                                     line2 = formatted_sentences[index]
 

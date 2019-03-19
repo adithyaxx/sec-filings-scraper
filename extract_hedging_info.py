@@ -14,7 +14,8 @@ from pathlib import Path
 from pandas.compat import reduce
 import nltk
 from nltk import tokenize
-import time
+import datetime
+
 from tqdm import tqdm
 
 nltk.download('punkt')
@@ -29,8 +30,8 @@ FILE_10Q = '10-Q'
 CSV_FILE = 'hedging_info.csv'
 IN_FILE = 'babylist.txt'
 
-HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter',
-           'ITEM 7A', 'P1', '% of our', 'P2', '% of projected', 'P3', 'hedg', 'P4', 'exposure to', 'P5', 'URL']
+HEADERS = ['CIK', 'NAME', 'FORM', 'Filing Date', 'Filing Year', 'Filing Quarter', 'Conformed Period', 'Standard Industrial Classification',
+           'State of Incorporation', 'City', 'State', '% + hedg', 'P1', 'hedg', 'P2', 'URL']
 
 
 def readfromweb(year, quarter):
@@ -101,6 +102,11 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
             filing_date = ""
             cik = ""
             company_name = ""
+            conformed_period = ""
+            standard_industrial = ""
+            state_of_incorporation = ""
+            city = ""
+            state = ""
 
             # Go through each line of the master index file, find 10K/10Q filings extract the text file path
             for i in range(0, len(response)):
@@ -126,13 +132,34 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
 
                                 percentage = i / len(response) * 100
 
-                                # print("[%.2f%%] [%s] Processing %s from %s" % (percentage, year, cik, url3))
-
-                                words = ['item 7a', '% of our', '% of projected', 'exposure to', 'full-time employee']
-
                                 lines = []
                                 formatted_sentences = []
                                 rows_to_write = []
+
+                                sptext = str(soup.get_text)
+                                for paragraph in sptext.split("\n"):
+                                    paragraph = re.sub('\s+', ' ', paragraph)
+
+                                    if 'CONFORMED PERIOD OF REPORT:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        fetched_date = split_by_colon[1].strip()
+                                        conformed_period = '%s-%s-%s' % (fetched_date[0:4], fetched_date[4:6], fetched_date[6:])
+
+                                    if "STANDARD INDUSTRIAL CLASSIFICATION:" in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        standard_industrial = split_by_colon[1].strip()
+
+                                    if 'STATE OF INCORPORATION:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        state_of_incorporation = split_by_colon[1].strip()
+
+                                    if "CITY:" in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        city = split_by_colon[1].strip()
+
+                                    if 'STATE:' in paragraph:
+                                        split_by_colon = paragraph.split(':')
+                                        state = split_by_colon[1].strip()
 
                                 for remove in soup.find_all(["table", "tr", "td"]):
                                     remove.decompose()
@@ -149,7 +176,7 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
                                                 formatted_sentences.append(sen)
 
                                 for index in range(0, len(formatted_sentences), 5):
-                                    row_to_write = [cik, company_name, form, filing_date, year, qtr]
+                                    row_to_write = [cik, company_name, form, filing_date, year, qtr, conformed_period, standard_industrial, state_of_incorporation, city, state]
                                     keywords = []
                                     line2 = formatted_sentences[index]
 
@@ -166,24 +193,14 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
                                         line2 += ' ' + formatted_sentences[index + 4]
 
                                     num1 = None
-                                    num2 = None
 
-                                    # Extract numbers near Item 7A
-                                    if words[0] in line2.lower():
-                                        keywords.extend([re.findall(r"(\d+\.\d+)", line2.lower()) +
-                                                         re.findall(r"(\d+ )", line2.lower())])
-                                        keywords.extend([line2])
-                                    else:
-                                        keywords.extend([''])
-                                        keywords.extend([''])
-
-                                    # Extract numbers near '% of our'
-                                    if words[1] in line2.lower() and 'hedg' in line2.lower():
+                                    # Extract numbers near '% of projected'
+                                    if '%' in line2.lower() and 'hedg' in line2.lower():
                                         # Find all numbers before keyword
-                                        num1 = re.findall(r"(\d+\.\d+)" + words[1], line2.lower()) + \
-                                               re.findall(r"(\d+\.\d+ )" + words[1], line2.lower()) + \
-                                               re.findall(r"(\d+)" + words[1], line2.lower()) + \
-                                               re.findall(r"(\d+ )" + words[1], line2.lower())
+                                        num1 = re.findall(r"(\d+\.\d+)" + '%', line2.lower()) + \
+                                               re.findall(r"(\d+\.\d+ )" + '%', line2.lower()) + \
+                                               re.findall(r"(\d+)" + '%', line2.lower()) + \
+                                               re.findall(r"(\d+ )" + '%', line2.lower())
 
                                         if num1:
                                             keywords.extend([num1])
@@ -195,55 +212,15 @@ for year in tqdm(range(MINYEAR, MAXYEAR)):
                                         keywords.extend([''])
                                         keywords.extend([''])
 
-                                    # Extract numbers near '% of projected'
-                                    if words[2] in line2.lower() and 'hedg' in line2.lower():
-                                        # Find all numbers before keyword
-                                        num2 = re.findall(r"(\d+\.\d+)" + words[2], line2.lower()) + \
-                                               re.findall(r"(\d+\.\d+ )" + words[2], line2.lower()) + \
-                                               re.findall(r"(\d+)" + words[2], line2.lower()) + \
-                                               re.findall(r"(\d+ )" + words[2], line2.lower())
-
-                                        if num2:
-                                            keywords.extend([num2])
-                                            keywords.extend([line2])
-                                        else:
-                                            keywords.extend([''])
-                                            keywords.extend([''])
-                                    else:
-                                        keywords.extend([''])
-                                        keywords.extend([''])
-
                                     # Extract numbers near hedg if the previous 2 search criteria get no hits
-                                    if 'hedg' in line2.lower() and num1 is None and num2 is None:
-                                        num3 = re.findall(r"(\d+\.\d+)", re.sub(r',', '', line2.lower())) + \
-                                               re.findall(r"(\d+ )", re.sub(r',', '', line2.lower()))
-
-                                        if num3:
-                                            keywords.extend([num3])
-                                            keywords.extend([line2])
-                                        else:
-                                            keywords.extend([''])
-                                            keywords.extend([''])
+                                    if 'hedg' in line2.lower() and num1 is None:
+                                        keywords.extend(['NA'])
+                                        keywords.extend([line2])
                                     else:
                                         keywords.extend([''])
                                         keywords.extend([''])
 
-                                    # Extract numbers near 'exposure to'
-                                    if words[3] in line2.lower():
-                                        num4 = re.findall(r"\$(\d+\.\d+)", re.sub(r',', '', line2.lower())) +\
-                                               re.findall(r"\$(\d+ )", re.sub(r',', '', line2.lower()))
-
-                                        if num4:
-                                            keywords.extend([num4])
-                                            keywords.extend([line2])
-                                        else:
-                                            keywords.extend([''])
-                                            keywords.extend([''])
-                                    else:
-                                        keywords.extend([''])
-                                        keywords.extend([''])
-
-                                    if keywords.count('') < 10:
+                                    if keywords.count('') < 4:
                                         row_to_write.extend(keywords)
                                         row_to_write.extend([url3])
                                         if row_to_write not in rows_to_write:
